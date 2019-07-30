@@ -1,7 +1,19 @@
 var fs = require('fs')
 var proofCode = require('../../rgb-encoding/proof.js')
 var sodium = require('sodium-native')
-var contractCode = require('../../MV rgb-encoding/contract.js')
+var contractCode = require('../../rgb-encoding/contract.js')
+const Client = require('bitcoin-core')
+
+const client = new Client({
+  network: 'regtest',
+  username: 'node1',
+  password: 'password',
+  port: 18443
+})
+
+var test
+client.listUnspent().then((list) => test = list)
+
 
 function UTXO (txid, vout) {
   return {
@@ -55,9 +67,9 @@ function getIdentityHash (item) {
 }
 
 // TODO: function to receive and parse previous proofs
-// ie from array of proofs, figure out if this output is referenced
-// function to make array of outputs
-// function to look at onchain parts -> eg generate tx input
+        // ie from array of proofs, figure out if this output is referenced
+        // function to make array of outputs
+        // function to look at onchain parts -> eg generate tx input
 
 function rootProofBuilder (contract, tx, metadata, originalPK, outputs) {
   var proof = {}
@@ -65,7 +77,7 @@ function rootProofBuilder (contract, tx, metadata, originalPK, outputs) {
   proof.contract = contract
   proof.tx = tx
   if (metadata) proof.metadata = metadata
-  if (originalPK) proof.originalPK = originalPK
+  if (originalPK) proof.originalPK = originalPKnode
   let assetId = getIdentityHash(contractCode.encode(contract)).toString('hex')
   for (let output of outputs) output.assetId = assetId
   proof.outputs = outputs
@@ -88,32 +100,32 @@ function proofBuilder (proofs, tx, outputs, metadata, originalPK) {
   return proof
 }
 
-function checkInputs (inputs, identifier) {
+// TODO: extend to apply to case where identifier is not given
+// gather input amounts for a given asset : identifier
+function checkInputs (proof, identifier) {
   var inputAmounts = {}
-  for (let proof of inputs) {
-    for (let output of proof.outputs) {
-      let assetId = outpoint.assetId
-      if (identifier === output.outpoint.address) {
-        if (assetId) inputAmounts[assetId] = 0
-        inputAmounts[output.assetId] = output.amount
-        }
-      }
+
+  if (proof.inputs.length === 0) {
+    checkOutputs(proof, identifier, inputAmounts)
+  } else {
+    for (let input of proof.inputs) {
+      checkOutputs(input, identifier, inputAmounts)
     }
   }
   return inputAmounts
 }
 
-function checkOutputs (outputs) {
-  var outputAmounts = {}
-  for (let output of outputs) {
-    let assetId = outpoint.assetId
+// check outputs for a given asset : identifier
+function checkOutputs (proof, identifier, outputs) {
+  if (!outputs) outputs = {}
+  for (let output of proof.outputs) {
+    let assetId = output.assetId
     if (identifier === output.outpoint.address) {
-      if (assetId) inputAmounts[assetId] = 0
-      inputAmounts[output.assetId] = output.amount
-      }
+      if (!outputs[assetId]) outputs[assetId] = 0
+      outputs[output.assetId] += output.amount
     }
   }
-  return outputAmounts
+  return outputs
 }
 
 // function to generate addresses for testing purposes
@@ -142,30 +154,30 @@ function txBuilder (address, inputs, outputs) {
   return tx
 }
 
-function getAssetsByUTXO (proof) {
-  var UTXOassets = {}
+function getAssetsByUTXO (proof, assets) {
+  if (!assets) assets = {}
 
   for (output of proof.outputs) {
     let outpoint = output.outpoint.address
-    if (!UTXOassets[outpoint]) UTXOassets[outpoint] = [] 
+    if (!assets[outpoint]) assets[outpoint] = [] 
 
-    UTXOassets[outpoint].push({
+    assets[outpoint].push({
       assetId: output.assetId,
       amount: output.amount
     })
   }
 
-  return UTXOassets
+  return assets
 }
 
-function getInputsByUTXO (proof) {
-  var inputAssets = {}
+function getInputsByUTXO (proof, assets) {
+  if (!assets) assets = {}
 
   for (input of proof.inputs) {
-    inputAssets[input.tx.id] = getAssetsByUTXO(input)
+    assets[input.tx.id] = getAssetsByUTXO(input)
   }
 
-  return inputAssets
+  return assets
 }
 
 function getOutputsByAsset (proof) {
@@ -200,8 +212,8 @@ function getOutputsByAsset (proof) {
 // what is needed: the current txid so that inputs may be checked
 // generate list of outputs, then generate proof
 
-var addressList = JSON.parse(fs.readFileSync('./addresses'))
-var transactions = JSON.parse(fs.readFileSync('./transactions'))
+var addressList = JSON.parse(fs.readFileSync('./fixtures/addresses'))
+var transactions = JSON.parse(fs.readFileSync('./fixtures/transactions'))
 
 /////////////////////////////////////
 ///         MINT NEW ASSETS       ///
@@ -235,7 +247,7 @@ var transactions = JSON.parse(fs.readFileSync('./transactions'))
 /////////////////////////////////////
 
 try {
-  var assets = JSON.parse(fs.readFileSync('./minted.assets'))
+  var assets = JSON.parse(fs.readFileSync('./fixtures/minted.assets'))
 } catch (err) {
   console.log(err)
   var assets = {}
@@ -255,9 +267,9 @@ try {
 ///         TRANSFER PROOFS       ///
 /////////////////////////////////////
 
-var rootProof1 = JSON.parse(fs.readFileSync('./root1.proof'))
-var rootProof2 = JSON.parse(fs.readFileSync('./root2.proof'))
-var rootProof3 = JSON.parse(fs.readFileSync('./root3.proof'))
+var rootProof1 = JSON.parse(fs.readFileSync('./fixtures/root1.proof'))
+var rootProof2 = JSON.parse(fs.readFileSync('./fixtures/root2.proof'))
+var rootProof3 = JSON.parse(fs.readFileSync('./fixtures/root3.proof'))
 
 var txInputs = [
   {
@@ -278,8 +290,8 @@ var newOutputs = []
 var assetId1 = rootProof1.outputs[0].assetId
 var assetId2 = rootProof2.outputs[0].assetId
 
-newOutputs.push(output(assetId1, checkInputs([rootProof1], 1)[assetId1] - 1000, outpoint('address', 0)))
-newOutputs.push(output(assetId2, checkInputs([rootProof2], 1)[assetId2] - 1500, outpoint('address', 0)))
+newOutputs.push(output(assetId1, checkInputs(rootProof1, 1)[assetId1] - 1000, outpoint('address', 0)))
+newOutputs.push(output(assetId2, checkInputs(rootProof2, 1)[assetId2] - 1500, outpoint('address', 0)))
 newOutputs.push(output(assetId1, 1000, outpoint('address', 2)))
 newOutputs.push(output(assetId2, 1500, outpoint('address', 3)))
 
@@ -288,7 +300,7 @@ var bindTo = txBuilder(addressList.pop(), txInputs, 4)
 var proof = proofBuilder([rootProof1, rootProof2], bindTo.result, newOutputs, 'hello')
 proof = JSON.stringify(proof, null, 2)
 
-fs.writeFile('./new.proof', proof, (err) => {
+fs.writeFile('./fixtures/new.proof', proof, (err) => {
   if (err) throw err
 })
 
@@ -296,9 +308,23 @@ fs.writeFile('./new.proof', proof, (err) => {
 // outputs to see how many assets are controlled by the transaction
 // issue: must record which UTXO output corresponds to proof output
 // status: use getAssetUTXO with blochain explorer to find out which assets a tx has access to.
+// setTimeout(() => console.log(test), 22)
+// console.log(checkInputs(rootProof1, 1))
+// console.log('checkInputs([rootProof1])')
+proofAssets = getAssetsByUTXO(JSON.parse(proof))
+let amounts = Object.values(proofAssets).reduce(arrayConcat, [])
 
-console.log(getAssetsByUTXO(JSON.parse(proof)))
-console.log(JSON.stringify(getOutputsByAsset(JSON.parse(proof)), null, 2))
+function arrayConcat(sum, next) {
+  return sum.concat(next)
+}
+  
+for (let asset of amounts) {
+  let assetId = asset.assetId
+  if (!assets[assetId]) assets[assetId] = 0
+  assets[assetId] += asset.amount
+}
+console.log(amounts)
+// console.log(JSON.stringify(getOutputsByAsset(JSON.parse(proof)), null, 2))
 //////////////////////////////////////
 
 // fs.writeFile('./transactions', JSON.stringify(transactions, null, 2), (err) => {

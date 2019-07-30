@@ -3,3 +3,5 @@ fixtures/
 utils/verification/package-lock.json
 utils/verification/example.proof
 utils/verification/node_modules
+proof/node_modules
+proof/package-lock.json

@@ -311,10 +311,13 @@ const optsNode2 = {
 
 const wallet = new RgbWallet('node2', proofs, optsNode2)
 
-var amounts = {'2e4fea47c555bde34ea7f430bfba73295a9385842228146252d5038814666c5b': 1200}
+var amounts = {
+  '2e4fea47c555bde34ea7f430bfba73295a9385842228146252d5038814666c5b': 1200,
+  '6d077e4aa88cb9f5ac89b720bc03ef63af29591f3c28ceb406581cc1b0e650ea': 600  
+}
 
 wallet.on('assets', () => {
-  transferAsset(wallet.wallet, amounts)
+  console.log(transferAsset(wallet.wallet, amounts))
 })
 
 wallet.update()
@@ -346,6 +349,59 @@ function mintAsset (contract, issuanceUTXO) {
 }
   
   
+// function transferAsset (assets, amounts) {
+//   // first check wallet has sufficient assets
+//   for (let asset of Object.keys(amounts)) {
+//     assert(assets[asset].amount >= amounts[asset],
+//       'Insufficient assets')
+//   }
+
+//   // select input UTXOs
+//   // this needs to be extended for multiple assets
+//   var candidates = {}
+//   for (const asset of Object.keys(amounts)) {
+//     const request = amounts[asset]
+//     candidates[asset] = inputSelection(assets, asset, request)
+//   }
+
+//   return candidates
+
+//   function inputSelection (assets, asset, request) {
+//     for (const ownedAsset of Object.keys(assets)) {
+//       // skip past not matched
+//       if (ownedAsset !== asset) continue
+//       const inputs = assets[ownedAsset].txList
+
+//       // look for UTXO, which satisfies request exactly
+//       let exactInputs = inputs.filter(UTXO => UTXO.amount === request )
+//         if (exactInputs.length) {
+//           return exactInputs[0]
+//         }
+
+//       // look for UTXOs that have enough assets and select the one
+//       // with the most assets
+//       let viableInputs = inputs.filter(UTXO => UTXO.amount > request)
+//       if (viableInputs.length) {
+//         let maxInput = viableInputs.reduce((max, input) =>
+//           max = input.amount > max.amount ? input : max)
+//         return maxInput
+//       }
+
+//       // add UTXOs with most assets until request is satisfied
+//       inputs.sort((a, b) => a.amount - b.amount)
+//       let inputSum = 0
+//       let chosenInputs = []
+
+//       while (inputSum < request) {
+//         let input = inputs.pop()
+//         chosenInputs.push(input)
+//         inputSum += input.amount
+//       }
+//       return chosenInputs
+//     }
+//   }
+// }
+
 function transferAsset (assets, amounts) {
   // first check wallet has sufficient assets
   for (let asset of Object.keys(amounts)) {
@@ -353,48 +409,66 @@ function transferAsset (assets, amounts) {
       'Insufficient assets')
   }
 
-  // select input UTXOs
-  function inputSelection (assets, amounts) {
-    for (const asset of Object.keys(amounts)) {
-      const request = amounts[asset]
-      for (const ownedAsset of Object.keys(assets)) {
-        // skip past not matched
-        if (ownedAsset !== asset) continue
-        const inputs = assets[ownedAsset].txList
+  const selectedInputs = []
 
-        // look for UTXO, which satisfies request exactly
-        let exactInputs = inputs.filter(UTXO => UTXO.amount === request )
-          if (exactInputs.length) {
-            return exactInputs[0]
-          }
+  const inputs = sortByUTXO(assets, Object.keys(amounts))
 
-        // look for UTXOs that have enough assets and select the one
-        // with the most assets
-        let viableInputs = inputs.filter(UTXO => UTXO.amount > request)
-        if (viableInputs.length) {
-          let maxInput = viableInputs.reduce((max, input) =>
-            max = input.amount > max.amount ? input : max)
-          return maxInput
-        }
+  let multiAssetInputs = Object.keys(inputs).filter((item) =>
+    inputs[item].length > 1)
 
-        // add UTXOs with most assets until request is satisfied
-        inputs.sort((a, b) => a.amount - b.amount)
-        let inputSum = 0
-        let chosenInputs = []
+  // handle case where one UTXO has multiple relevant assets
+  if (multiAssetInputs.length !== 0) {
 
-        while (inputSum < amount) {
-          let input = inputs.pop()
-          chosenInputs.push(input)
-          inputSum += input.amount
-        }
-        return chosenInputs
-      }
+    const selectedUTXO = multipleAssets(multiAssetInputs)
+    selectedInputs.push(selectedUTXO)
+    for (let asset of inputs[selectedUTXO]) {
+      let diff = amounts[asset.asset] - asset.amount
+      amounts[asset.asset] = diff < 0 ? 0 : diff
+    }
+    for (let asset of Object.keys(amounts)) {
+      if (amounts[asset] === 0) delete amounts[asset]
     }
   }
 
-  console.log(inputSelection(assets, amounts))
-}
+  function multipleAssets (list) {
+    let results = []
+    for (let UTXO of list) {
+      let copy = { ...amounts }
+      for (let asset of inputs[UTXO]) {
+        let diff = copy[asset.asset] - asset.amount
+        copy[asset.asset] = diff < 0 ? 0 : diff
+      }
 
+      results[UTXO] = Object.values(copy).reduce((acc, value) =>
+        acc + value, 0)
+    }
+
+    return Object.keys(results).reduce((best, next) =>
+      (results.best < results.next) ? next : best)
+  }
+
+  // sort rgb inputs according to UTXO
+  function sortByUTXO (assets, transfers) {
+
+    var transactions = {}
+
+    for (let asset of Object.keys(assets)) {
+      if (!transfers.includes(asset)) continue
+      let inputs = assets[asset].txList
+
+      for (let input of inputs) {
+        const label = `${input.tx}:${input.vout}`
+        if (!transactions[label]) transactions[label] = []
+        transactions[label].push({
+          asset: asset,
+          amount: input.amount
+        })
+      }
+    }
+
+    return transactions
+  }
+}
   // calculate assets available for transfer
   // make new transfer proof
   // tweak keys
@@ -430,10 +504,14 @@ function getTotalAssets (proofs) {
 
       for (let asset of amounts) {
         let assetId = asset.assetId
+        let vout = Object.keys(proofAssets).find((key) =>
+          proofAssets[key].includes(asset))
+
         if (!assets[assetId])  assets[assetId] = { txList: [] }
         
         assets[assetId].txList.push({
           tx: proof.tx.id,
+          vout: vout,
           amount: asset.amount
         })
 

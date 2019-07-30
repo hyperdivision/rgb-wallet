@@ -349,107 +349,62 @@ function mintAsset (contract, issuanceUTXO) {
 }
   
   
-// function transferAsset (assets, amounts) {
-//   // first check wallet has sufficient assets
-//   for (let asset of Object.keys(amounts)) {
-//     assert(assets[asset].amount >= amounts[asset],
-//       'Insufficient assets')
-//   }
 
-//   // select input UTXOs
-//   // this needs to be extended for multiple assets
-//   var candidates = {}
-//   for (const asset of Object.keys(amounts)) {
-//     const request = amounts[asset]
-//     candidates[asset] = inputSelection(assets, asset, request)
-//   }
 
-//   return candidates
-
-//   function inputSelection (assets, asset, request) {
-//     for (const ownedAsset of Object.keys(assets)) {
-//       // skip past not matched
-//       if (ownedAsset !== asset) continue
-//       const inputs = assets[ownedAsset].txList
-
-//       // look for UTXO, which satisfies request exactly
-//       let exactInputs = inputs.filter(UTXO => UTXO.amount === request )
-//         if (exactInputs.length) {
-//           return exactInputs[0]
-//         }
-
-//       // look for UTXOs that have enough assets and select the one
-//       // with the most assets
-//       let viableInputs = inputs.filter(UTXO => UTXO.amount > request)
-//       if (viableInputs.length) {
-//         let maxInput = viableInputs.reduce((max, input) =>
-//           max = input.amount > max.amount ? input : max)
-//         return maxInput
-//       }
-
-//       // add UTXOs with most assets until request is satisfied
-//       inputs.sort((a, b) => a.amount - b.amount)
-//       let inputSum = 0
-//       let chosenInputs = []
-
-//       while (inputSum < request) {
-//         let input = inputs.pop()
-//         chosenInputs.push(input)
-//         inputSum += input.amount
-//       }
-//       return chosenInputs
-//     }
-//   }
-// }
-
-function transferAsset (assets, amounts) {
+function transferAsset (assets, request) {
   // first check wallet has sufficient assets
-  for (let asset of Object.keys(amounts)) {
-    assert(assets[asset].amount >= amounts[asset],
+  for (let asset of Object.keys(request)) {
+    assert(assets[asset].amount >= request[asset],
       'Insufficient assets')
   }
 
-  const selectedInputs = []
+  // sort available inputs
+  const availableInputs = sortByUTXO(assets, Object.keys(request))
 
-  const inputs = sortByUTXO(assets, Object.keys(amounts))
+  // perform coin selection
+  const selectedInputs = coinSelector(availableInputs, request)
 
-  let multiAssetInputs = Object.keys(inputs).filter((item) =>
-    inputs[item].length > 1)
+  // construct transfer proof
+  const 
 
-  // handle case where one UTXO has multiple relevant assets
-  if (multiAssetInputs.length !== 0) {
+  // subtract UTXO asset amounts from requested amounts and
+  // choose UTXO which yields least outstanding balance
+  function coinSelector (inputs, request, selectedInputs) {
+    if (!selectedInputs) selectedInputs = []
+    if (Object.keys(request).length === 0) return selectedInputs
+    let diffs = {}
+    for (let [utxo, assets] of Object.entries(inputs)) {
+      for (let asset of assets) {
+        if (!Object.keys(request).includes(asset.asset)) continue
 
-    const selectedUTXO = multipleAssets(multiAssetInputs)
-    selectedInputs.push(selectedUTXO)
-    for (let asset of inputs[selectedUTXO]) {
-      let diff = amounts[asset.asset] - asset.amount
-      amounts[asset.asset] = diff < 0 ? 0 : diff
-    }
-    for (let asset of Object.keys(amounts)) {
-      if (amounts[asset] === 0) delete amounts[asset]
-    }
-  }
-
-  function multipleAssets (list) {
-    let results = []
-    for (let UTXO of list) {
-      let copy = { ...amounts }
-      for (let asset of inputs[UTXO]) {
-        let diff = copy[asset.asset] - asset.amount
-        copy[asset.asset] = diff < 0 ? 0 : diff
+        if (!diffs[utxo]) diffs[utxo] = { ...request }
+        let diff = request[asset.asset] - asset.amount
+        diffs[utxo][asset.asset] = diff < 0 ? 0 : diff
       }
-
-      results[UTXO] = Object.values(copy).reduce((acc, value) =>
-        acc + value, 0)
     }
 
-    return Object.keys(results).reduce((best, next) =>
-      (results.best < results.next) ? next : best)
+    let bestChoices = Object.keys(diffs).sort((obj, compare) => {
+      Object.values(diffs[compare]).reduce((a, b) => a + b, 0)
+      - Object.values(diffs[obj]).reduce((a, b) => a + b, 0)
+    })
+
+    let selectedUTXO = bestChoices[0]
+    
+    selectedInputs.push(selectedUTXO)
+    delete inputs[selectedUTXO]
+    request = diffs[selectedUTXO]
+
+    if (Object.keys(request).length !== 0) {
+      for (let [key, value] of Object.entries(request)) {
+        if (value === 0) delete request[key]
+      }
+    }
+    
+    return coinSelector(inputs, request, selectedInputs)
   }
 
   // sort rgb inputs according to UTXO
   function sortByUTXO (assets, transfers) {
-
     var transactions = {}
 
     for (let asset of Object.keys(assets)) {
@@ -469,7 +424,6 @@ function transferAsset (assets, amounts) {
     return transactions
   }
 }
-  // calculate assets available for transfer
   // make new transfer proof
   // tweak keys
   // make transfer tx

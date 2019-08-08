@@ -2,7 +2,9 @@ const Client = require('bitcoin-core')
 const assert = require('nanoassert')
 const fs = require('fs')
 const rgbEncode = require('../rgb-encoding/contract.js')
+const verify = require('./utils/verification/proof.js')
 const { EventEmitter } = require('events')
+
 // const utils = require('./parse-proof/index.js')
 
 const client = new Client({
@@ -79,27 +81,36 @@ class RgbWallet extends EventEmitter {
       return self.proofs
     }
   }
+
+  async fetchTx (TxID) {
+    const self = this
+    const result = await wallet.client.getRawTransaction(TxID, 1)
+    // var tx = wallet.client.decodeRawTransaction(result)
+    //   .then((r) => { return r })
+
+    return result
+  }
 }
 
 var proof1 = JSON.parse(fs.readFileSync('./proof/fixtures/new.proof'))
 var proof2 = JSON.parse(fs.readFileSync('./proof/fixtures/running.proof'))
 
 let proofs = [proof1, proof2]
-console.log(proofs)
+// console.log(proofs)
 
 
-const rpcInfoNode2 = {
+const rpcInfoNode1 = {
   network: 'regtest',
   username: 'node1',
   password: 'password',
   port: 18443
 }
 
-const optsNode2 = {
-  rpcInfo: rpcInfoNode2,
+const optsNode1 = {
+  rpcInfo: rpcInfoNode1,
 }
 
-const wallet = new RgbWallet('node2', proofs, optsNode2)
+const wallet = new RgbWallet('node1', proofs, optsNode1)
 
 var amounts = {
   '2e4fea47c555bde34ea7f430bfba73295a9385842228146252d5038814666c5b': 3300,
@@ -112,7 +123,13 @@ wallet.on('update', (promise) =>
 
 wallet.update()
 
-setTimeout(() => console.log(wallet.assets), 200)
+// setTimeout(() => console.log(wallet.assets), 200)
+let tx = {}
+wallet.fetchTx('4b6d93d4657c418d5ed8c02619a8adb35c3ad620dbaf6717c08ae65b85f9d64b').then((tx) => console.log(JSON.stringify(tx, null, 2)) )
+const eg = JSON.parse(fs.readFileSync('./utils/verification/example.proof').toString())
+// console.log(eg)
+// verification.verify(eg, wallet)
+
 // setTiconsole.log(transferAsset(wallet, amounts))
 
 // events:
@@ -370,10 +387,6 @@ function getAssetsByUTXO (proof, assets) {
   return assets
 }
 
-async function listUnspent (client) {
-  if (!proofs.length) return {}
-  return await client.listUnspent()
-}
 
 function proofsByUTXO (self) {
   return (UTXOs) => {

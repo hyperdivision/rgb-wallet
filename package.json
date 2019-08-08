@@ -4,8 +4,24 @@
   "description": "Wallet for handling RGB Assets",
   "main": "wallet.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "linter": "standard"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hyperdivision/rgb-wallet.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hyperdivision/rgb-wallet/issues"
+  },
+  "homepage": "https://github.com/hyperdivision/rgb-wallet#readme",
+  "dependencies": {
+    "bitcoin-core": "^2.2.0",
+    "nanoassert": "^2.0.0"
+  },
+  "devDependencies": {
+    "standard": "^.1.0"
+  }
 }

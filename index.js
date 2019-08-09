@@ -1,19 +1,18 @@
 const Client = require('bitcoin-core')
 const { EventEmitter } = require('events')
+const getTotalAssets = require('./lib/get-assets.js')
 
 class RgbWallet extends EventEmitter {
   constructor (name, proofs, opts) {
     super()
 
     this.name = name
-    // this.storage = opts.storage || newDirPath()
-    this.rpcInfo = opts.rpcInfo
-
-    // this should be the only class
-    // in dialogue with client
     this.proofs = proofs
+    this.rpcInfo = opts.rpcInfo
+ 
     this.client = new Client(this.rpcInfo)
     this.assets = null
+    this.utxos = null
   }
 
   sortProofs (proofs) {
@@ -27,15 +26,31 @@ class RgbWallet extends EventEmitter {
     return proofsByUTXO
   }
 
+  sortUTXOs () {
+    const self = this
+    return (UTXOs) => {
+      this.utxos = UTXOs.map(a => {
+        const utxo = {
+          txid: a.txid,
+          vout: a.vout,
+          address: a.address,
+          amount: a.amount
+        }
+        return utxo
+      })
+    }
+  }
+
   update () {
     const self = this
     let promise = listUnspent(self.client)
     self.emit('update', promise)
+    return promise
   }
 
-  updateAssets (getUTXOs) {
+  updateAssets (listUnspent) {
     const self = this
-    getUTXOs.then(getTotalAssets(self.proofs))
+    listUnspent.then(getTotalAssets(self.proofs))
       .then(assets => {
         self.assets = assets
         return assets

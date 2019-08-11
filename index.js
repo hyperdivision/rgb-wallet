@@ -15,7 +15,8 @@ class RgbWallet extends EventEmitter {
     this.utxos = null
   }
 
-  sortProofs (proofs) {
+  sortProofs () {
+    const proofs = this.proofs
     const proofsByUTXO = {}
     for (let proof of proofs) {
       for (let output of proof.tx.outputs) {

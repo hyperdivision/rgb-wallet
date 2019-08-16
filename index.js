@@ -1,6 +1,8 @@
 const Client = require('bitcoin-core')
 const { EventEmitter } = require('events')
 const getTotalAssets = require('./lib/get-assets.js')
+const transferAsset = require('./lib/transfer-asset.js')
+const receiveAsset = require('./lib/receive-asset.js')
 
 class RgbWallet extends EventEmitter {
   constructor (name, proofs, opts) {
@@ -80,6 +82,46 @@ class RgbWallet extends EventEmitter {
     var tx = self.client.decodeRawTransaction(result)
 
     return tx
+  }
+
+  // sending party: collect and send necessary parts
+  // for paying party to build tx
+  transfer (request) {
+    const self = this
+    let inputs = transferAsset(self, request)
+    self.emit('transfer', inputs)
+    return inputs
+  }
+
+  // receiving party: verify and build tx for sending party to publish
+  async accept (inputs, opts) {
+    const self = this
+    // for (let proof of inputs.proofs) {
+    //   verify.proof(proof)
+    // }
+
+    const output = receiveAsset(inputs, opts)
+    const rpc = output.rpc
+
+    const rawTx = await self.client.createRawTransaction(rpc.inputs, rpc.outputs)
+    self.emit('accept', rawTx)
+
+    self.client.decodeRawTransaction(rawTx).then((tx) => {
+      output.proof.tx.id = tx.txid
+      // TODO -> deal with this pending tag
+      output.proof.pending = true
+      self.proofs.push(output.proof)
+    })
+    return rawTx
+  }
+
+  async send (rawTx) {
+    const self = this
+    await (self.client.decodeRawTransaction(tx.hex)
+      .then((tx) => checkTx(tx)))
+
+    self.client.signRawTransactionWithWallet(rawTx)
+      .then((tx) => self.client.sendRawTransaction(tx.hex))
   }
 }
 

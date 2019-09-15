@@ -3,30 +3,51 @@ const { EventEmitter } = require('events')
 const getTotalAssets = require('./lib/get-assets.js')
 const transferAsset = require('./lib/transfer-asset.js')
 const receiveAsset = require('./lib/receive-asset.js')
+const rgb = require('../rgb-encoding/index.js')
+const sodium = require('sodium-native')
+const bech32 = require('bech32')
 
 class RgbWallet extends EventEmitter {
-  constructor (name, proofs, opts) {
+  constructor (name, proofs, schemas, opts) {
     super()
 
     this.name = name
     this.proofs = proofs
+    this.schemas = schemas
     this.rpcInfo = opts.rpcInfo
  
     this.client = new Client(this.rpcInfo)
     this.assets = null
     this.utxos = null
+    this.schemata = null
   }
 
   sortProofs () {
     const proofs = this.proofs
     const proofsByUTXO = {}
     for (let proof of proofs) {
-      for (let output of proof.tx.outputs) {
-        let outpoint = `${proof.tx.id}:${output}`
+      for (let seal of proof.seals) {
+        let outpoint = seal.outpoint
         proofsByUTXO[outpoint] = proof
       }
     }
     return proofsByUTXO
+  }
+
+  indexSchema () {
+    const self = this
+    self.schemata = {}
+    for (let schema of self.schemas) {
+      let encodedSchema = rgb.schema.encode(schema)
+      let schemaHash = Buffer.alloc(sodium.crypto_hash_sha256_BYTES)
+
+      sodium.crypto_hash_sha256(schemaHash, encodedSchema)
+      sodium.crypto_hash_sha256(schemaHash, schemaHash)
+
+      const schemaId = bech32.encode('sm', bech32.toWords(schemaHash))
+      self.schemata[schemaId] = schema
+    }
+    return self.schemata
   }
 
   sortUTXOs () {
@@ -93,6 +114,7 @@ class RgbWallet extends EventEmitter {
     return inputs
   }
 
+  // this is where i am at 15/09/19
   // receiving party: verify and build tx for sending party to publish
   async accept (inputs, opts) {
     const self = this
@@ -100,7 +122,7 @@ class RgbWallet extends EventEmitter {
     //   verify.proof(proof)
     // }
 
-    const output = receiveAsset(inputs, opts)
+    const output = receiveAsset(inputs, self.utxos, opts)
     const rpc = output.rpc
 
     const rawTx = await self.client.createRawTransaction(rpc.inputs, rpc.outputs)
@@ -112,6 +134,7 @@ class RgbWallet extends EventEmitter {
       output.proof.pending = true
       self.proofs.push(output.proof)
     })
+
     return rawTx
   }
 

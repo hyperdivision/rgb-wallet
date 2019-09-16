@@ -6,6 +6,7 @@ const receiveAsset = require('./lib/receive-asset.js')
 const rgb = require('../rgb-encoding/index.js')
 const sodium = require('sodium-native')
 const bech32 = require('bech32')
+const assert = require('nanoassert')
 
 class RgbWallet extends EventEmitter {
   constructor (name, proofs, schemas, opts) {
@@ -121,18 +122,23 @@ class RgbWallet extends EventEmitter {
     // for (let proof of inputs.proofs) {
     //   verify.proof(proof)
     // }
+    const schemas = new Set(Object.values(inputs.proofs).map((proof) => proof.schema))
+
+    assert(schemas.size === 1, 'more than one schema present')
+    inputs.schemaId = [...schemas][0]
+    inputs.schema = self.schemata[inputs.schemaId]
 
     const output = receiveAsset(inputs, self.utxos, opts)
     const rpc = output.rpc
 
     const rawTx = await self.client.createRawTransaction(rpc.inputs, rpc.outputs)
     self.emit('accept', rawTx)
-
+    
     self.client.decodeRawTransaction(rawTx).then((tx) => {
-      output.proof.tx.id = tx.txid
       // TODO -> deal with this pending tag
+      console.log(JSON.stringify(tx, null, 2))
       output.proof.pending = true
-      self.proofs.push(output.proof)
+      // self.proofs.push(output.proof)
     })
 
     return rawTx

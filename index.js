@@ -75,8 +75,8 @@ class RgbWallet extends EventEmitter {
 
   updateAssets (listUnspent) {
     const self = this
-    listUnspent.then(getTotalAssets(self.proofs))
-      .then(assets => {
+    listUnspent.then(getTotalAssets(self.client, self.proofs))
+      .then((assets) => {
         self.assets = assets
         return assets
     })
@@ -108,11 +108,25 @@ class RgbWallet extends EventEmitter {
 
   // sending party: collect and send necessary parts
   // for paying party to build tx
-  transfer (request) {
+  transfer (requests) {
     const self = this
-    let inputs = transferAsset(self, request)
-    self.emit('transfer', inputs)
-    return inputs
+    let assets = requests.map((request) => Object.keys(request)[1])
+    assets = new Set(assets)
+    console.log(assets)
+    self.generateAddresses(assets.size).then((changeAddresses) => {
+      let inputs = transferAsset(self, requests, changeAddresses)
+      self.emit('transfer', inputs)
+      return inputs
+    })
+  }
+
+  async generateAddresses (number) {
+    const self = this
+    const addresses = []
+    for (let i = 0; i < number; i++) {
+      await self.client.getNewAddress('', 'legacy').then((address) => addresses.push(address))
+    }
+    return addresses
   }
 
   // this is where i am at 15/09/19
@@ -122,6 +136,7 @@ class RgbWallet extends EventEmitter {
     // for (let proof of inputs.proofs) {
     //   verify.proof(proof)
     // }
+
     const schemas = new Set(Object.values(inputs.proofs).map((proof) => proof.schema))
 
     assert(schemas.size === 1, 'more than one schema present')

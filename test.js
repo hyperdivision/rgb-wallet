@@ -67,7 +67,7 @@ test('wallet API', (t) => {
   t.assert(w.transfer, 'transfer method exists')
   t.assert(w.generateAddresses, 'generateAddresses method exists')
   t.assert(w.accept, 'accept method exists')
-  t.assert(w.send, 'send method exists')
+  t.assert(w.broadcastTx, 'broadcastTx method exists')
   t.end()
 })
 
@@ -87,5 +87,40 @@ ptest('initialise wallet', async t => {
   t.deepEqual(w.assets, expectedAssets, 'wallet has expected assets')
   t.true(Array.isArray(w.utxos), 'wallet.utxos is an array')
   t.true(w.utxos.length > 0, 'wallet.utxos is an array of length greater than 0')
-  console.log(w.assets)
+})
+
+ptest('two wallets performing transactions', async t => {
+  const rpcInfoNode2 = {
+    port: 18443,
+    username: 'node1',
+    password: 'a',
+    datadir: '../bitcoind',
+    wallet: '2'
+  }
+
+  const opts2 = { rpcInfo: rpcInfoNode2 }
+
+  const w1 = new Wallet('test', [rootProof], [rgbSchema], opts1)
+  const w2 = new Wallet('test', [rootProof], [rgbSchema], opts2)
+
+  await Promise.all([
+    w1.init(),
+    w2.init()
+  ])
+
+  const requestedAsset = { asset: 'PLS', amount: 600 }
+
+  const request = await w2.createRequest(requestedAsset)
+  console.log(request)
+  const transferProposal = await w1.createTransferProposal(request)
+  console.log(transferProposal)
+  // if (!(await w2.tpApprove(transferProposal))) t.fail()
+  const txProposal = await w2.createTxProposal(transferProposal)
+  console.log(txProposal)
+  // if (!(await w1.txApprove(txProposal))) t.fail()
+  const finalTx = w1.broadcastTransaction(txProposal)
+  console.log(finalTx)
+
+  await w2.update()
+  t.assert(w2.confirmTx)
 })

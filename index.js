@@ -1,8 +1,6 @@
 const Client = require('bitcoin-core')
 const { EventEmitter } = require('events')
-const pmap = require('p-map')
 const { getSealsFrom, getTotalAssets } = require('./lib/get-assets.js')
-const network = require('./lib/network-utils.js')
 const transferAsset = require('./lib/transfer-asset.js')
 const receiveAsset = require('./lib/receive-asset.js')
 const rgb = require('../rgb-encoding/index.js')
@@ -29,6 +27,7 @@ class RgbWallet extends EventEmitter {
     const unspent = await this.client.listUnspent()
     const { assets, outpoints } = getSealsFrom(this.proofs)
 
+    // TODO: filter from unspent rather than client.getTxOutloop
     const sealedOutpoints = []
     for (const op of outpoints) {
       const utxoInfo = await this.client.getTxOut(op.tx, op.vout)
@@ -49,6 +48,24 @@ class RgbWallet extends EventEmitter {
       }
       return utxo
     })
+  }
+
+  async createRequest (requestedAsset) {
+    const request = {}
+    request.asset = requestedAsset.asset
+    request.amount = requestedAsset.amount
+    request.address = await this.generateAddresses(1)[0]
+    return request
+  }
+
+  async createTransferProposal (request) {
+    const transferProposal = await this.transfer(request)
+    return transferProposal
+  }
+
+  async createTxProposal (transferProposal) {
+    const txProposal = await this.accept(transferProposal)
+    return txProposal
   }
 
   sortProofs () {
@@ -136,15 +153,13 @@ class RgbWallet extends EventEmitter {
 
   // sending party: collect and send necessary parts
   // for paying party to build tx
-  transfer (requests) {
+  async transfer (requests) {
     const self = this
-    let assets = requests.map((request) => Object.keys(request)[1])
+    let assets = requests.map((request) => request.asset)
     assets = new Set(assets)
-    self.generateAddresses(assets.size).then((changeAddresses) => {
-      const inputs = transferAsset(self, requests, changeAddresses)
-      self.emit('transfer', inputs)
-      return inputs
-    })
+    const changeAddresses = self.generateAddresses(assets.size)
+    const inputs = transferAsset(self, requests, changeAddresses)
+    return inputs
   }
 
   async generateAddresses (number) {
@@ -183,15 +198,15 @@ class RgbWallet extends EventEmitter {
       console.log(tx.vout)
       output.proof.pending = true
       output.proof.txid = tx.txid
+      console.log(self.proofs)
       output.proof.vout = 0
       self.proofs.push(output.proof)
-      console.log(self.proofs)
     })
 
     return rawTx
   }
 
-  async send (rawTx) {
+  async broadcastTx (rawTx) {
     const self = this
     console.log(rawTx)
     await (self.client.decodeRawTransaction(rawTx)).catch((err) => console.log(err))

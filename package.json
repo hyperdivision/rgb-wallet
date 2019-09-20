@@ -4,7 +4,7 @@
   "description": "Wallet for handling RGB Assets",
   "main": "wallet.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "tape test.js | tap-format-spec",
     "linter": "standard"
   },
   "author": "",
@@ -28,6 +28,9 @@
     "sodium-native": "^2.4.6"
   },
   "devDependencies": {
-    "standard": "^.1.0"
+    "@tap-format/spec": "^0.2.0",
+    "standard": "^14.1.0",
+    "tape": "^4.11.0",
+    "tape-promise": "^4.0.0"
   }
 }

@@ -16,7 +16,7 @@ class RgbWallet extends EventEmitter {
     this.proofs = proofs
     this.schemas = schemas
     this.rpcInfo = opts.rpcInfo
- 
+
     this.client = new Client(this.rpcInfo)
     this.assets = null
     this.utxos = null
@@ -54,7 +54,7 @@ class RgbWallet extends EventEmitter {
   sortUTXOs () {
     const self = this
     return (UTXOs) => {
-      this.utxos = UTXOs.map(a => {
+      self.utxos = UTXOs.map(a => {
         const utxo = {
           txid: a.txid,
           vout: a.vout,
@@ -112,7 +112,6 @@ class RgbWallet extends EventEmitter {
     const self = this
     let assets = requests.map((request) => Object.keys(request)[1])
     assets = new Set(assets)
-    console.log(assets)
     self.generateAddresses(assets.size).then((changeAddresses) => {
       let inputs = transferAsset(self, requests, changeAddresses)
       self.emit('transfer', inputs)
@@ -133,16 +132,17 @@ class RgbWallet extends EventEmitter {
   // receiving party: verify and build tx for sending party to publish
   async accept (inputs, opts) {
     const self = this
-    // for (let proof of inputs.proofs) {
+    // for (let proof of Object.values(inputs.proofs)) {
     //   verify.proof(proof)
     // }
-
-    const schemas = new Set(Object.values(inputs.proofs).map((proof) => proof.schema))
-
+  
+    const schemas = new Set(inputs.proofs.map((proof) => proof.schema))
     assert(schemas.size === 1, 'more than one schema present')
     inputs.schemaId = [...schemas][0]
     inputs.schema = self.schemata[inputs.schemaId]
 
+    await self.client.getAddressInfo(inputs.request[0].address).then((info) =>
+      inputs.originalPubKey = info.pubkey)
     const output = receiveAsset(inputs, self.utxos, opts)
     const rpc = output.rpc
 
@@ -152,8 +152,12 @@ class RgbWallet extends EventEmitter {
     self.client.decodeRawTransaction(rawTx).then((tx) => {
       // TODO -> deal with this pending tag
       console.log(JSON.stringify(tx, null, 2))
+      console.log(tx.vout)
       output.proof.pending = true
-      // self.proofs.push(output.proof)
+      output.proof.txid = tx.txid
+      output.proof.vout = 0
+      self.proofs.push(output.proof)
+      console.log(self.proofs)
     })
 
     return rawTx
@@ -161,8 +165,9 @@ class RgbWallet extends EventEmitter {
 
   async send (rawTx) {
     const self = this
-    await (self.client.decodeRawTransaction(tx.hex)
-      .then((tx) => checkTx(tx)))
+    console.log(rawTx)
+    await (self.client.decodeRawTransaction(rawTx)).catch((err) => console.log(err))
+      // .then((tx) => checkTx(tx)))
 
     self.client.signRawTransactionWithWallet(rawTx)
       .then((tx) => self.client.sendRawTransaction(tx.hex))

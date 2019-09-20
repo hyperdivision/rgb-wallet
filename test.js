@@ -71,31 +71,21 @@ test('wallet API', (t) => {
   t.end()
 })
 
-test('initialise wallet', t => {
-  const w = new Wallet('test', [rootProof], [rgbSchema], opts1)
-
-  const expectedAssets = {
-    PLS: {
-      txList: [
-        {
-          tx: 'e4f7881de6747d99e00d7b4db95daafddc95ea7079754d2d45d63758beaa8eab',
-          vout: 0,
-          asset: 'PLS',
-          amount: 1000000
-        }
-      ],
+ptest('initialise wallet', async t => {
+  const expectedAssets = [
+    {
+      tx: 'e4f7881de6747d99e00d7b4db95daafddc95ea7079754d2d45d63758beaa8eab',
+      vout: 0,
+      asset: 'PLS',
       amount: 1000000
     }
-  }
+  ]
 
-  w.on('update', w.updateAssets)
-  w.indexSchema()
-  w.update().then(w.sortUTXOs())
+  const w = new Wallet('test', [rootProof], [rgbSchema], opts1)
 
-  setTimeout(() => {
-    t.deepEqual(w.assets, expectedAssets, 'wallet has expected assets')
-    t.true(Array.isArray(w.utxos), 'wallet.utxos is an array')
-    t.true(w.utxos.length > 0, 'wallet.utxos is an array of length greater than 0')
-    t.end()
-  }, 2000)
+  await w.init()
+  t.deepEqual(w.assets, expectedAssets, 'wallet has expected assets')
+  t.true(Array.isArray(w.utxos), 'wallet.utxos is an array')
+  t.true(w.utxos.length > 0, 'wallet.utxos is an array of length greater than 0')
+  console.log(w.assets)
 })

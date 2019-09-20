@@ -4,7 +4,7 @@
   "description": "Wallet for handling RGB Assets",
   "main": "wallet.js",
   "scripts": {
-    "test": "tape test.js | tap-format-spec",
+    "test": "tape test.js",
     "linter": "standard"
   },
   "author": "",

@@ -27,11 +27,11 @@ class RgbWallet extends EventEmitter {
     const unspent = await this.client.listUnspent()
     const { assets, outpoints } = getSealsFrom(this.proofs)
 
-    // TODO: filter from unspent rather than client.getTxOutloop
     const sealedOutpoints = []
-    for (const op of outpoints) {
-      const utxoInfo = await this.client.getTxOut(op.tx, op.vout)
-      if (utxoInfo !== null) sealedOutpoints.push(op)
+    for (const outpoint of outpoints) {
+      const utxoInfo = unspent.find(utxo =>
+        utxo.txid === outpoint.tx && utxo.vout === outpoint.vout)
+      if (utxoInfo !== null) sealedOutpoints.push(outpoint)
     }
 
     this.assets = assets.filter(asset => {
@@ -48,14 +48,37 @@ class RgbWallet extends EventEmitter {
       }
       return utxo
     })
+
+    this.indexSchema()
   }
 
-  async createRequest (requestedAsset) {
-    const request = {}
-    request.asset = requestedAsset.asset
-    request.amount = requestedAsset.amount
-    request.address = await this.generateAddresses(1)[0]
-    return request
+  indexSchema () {
+    const self = this
+    self.schemata = {}
+    for (const schema of self.schemas) {
+      const encodedSchema = rgb.schema.encode(schema)
+      const schemaHash = Buffer.alloc(sodium.crypto_hash_sha256_BYTES)
+
+      sodium.crypto_hash_sha256(schemaHash, encodedSchema)
+      sodium.crypto_hash_sha256(schemaHash, schemaHash)
+
+      const schemaId = bech32.encode('sm', bech32.toWords(schemaHash))
+      self.schemata[schemaId] = schema
+    }
+    return self.schemata
+  }
+
+  async createRequest (requestedAssets) {
+    const requestList = []
+    const addresses = await this.generateAddresses(requestedAssets.length)
+    requestedAssets.map(request => {
+      const formatRequest = {}
+      formatRequest.asset = request.asset
+      formatRequest.amount = request.amount
+      formatRequest.address = addresses.pop()
+      requestList.push(formatRequest)
+    })
+    return requestList
   }
 
   async createTransferProposal (request) {
@@ -78,22 +101,6 @@ class RgbWallet extends EventEmitter {
       }
     }
     return proofsByUTXO
-  }
-
-  indexSchema () {
-    const self = this
-    self.schemata = {}
-    for (const schema of self.schemas) {
-      const encodedSchema = rgb.schema.encode(schema)
-      const schemaHash = Buffer.alloc(sodium.crypto_hash_sha256_BYTES)
-
-      sodium.crypto_hash_sha256(schemaHash, encodedSchema)
-      sodium.crypto_hash_sha256(schemaHash, schemaHash)
-
-      const schemaId = bech32.encode('sm', bech32.toWords(schemaHash))
-      self.schemata[schemaId] = schema
-    }
-    return self.schemata
   }
 
   sortUTXOs (UTXOs) {
@@ -155,9 +162,11 @@ class RgbWallet extends EventEmitter {
   // for paying party to build tx
   async transfer (requests) {
     const self = this
-    let assets = requests.map((request) => request.asset)
+    let assets = Object.entries(requests).map(([key, value]) => {
+      if (key === 'asset') return value
+    })
     assets = new Set(assets)
-    const changeAddresses = self.generateAddresses(assets.size)
+    const changeAddresses = await self.generateAddresses(assets.size)
     const inputs = transferAsset(self, requests, changeAddresses)
     return inputs
   }
@@ -178,7 +187,6 @@ class RgbWallet extends EventEmitter {
     // for (let proof of Object.values(inputs.proofs)) {
     //   verify.proof(proof)
     // }
-
     const schemas = new Set(inputs.proofs.map((proof) => proof.schema))
     assert(schemas.size === 1, 'more than one schema present')
     inputs.schemaId = [...schemas][0]
@@ -189,6 +197,8 @@ class RgbWallet extends EventEmitter {
     const output = receiveAsset(inputs, self.utxos, opts)
     const rpc = output.rpc
 
+    // focus here!!!
+    console.log(rpc.inputs, rpc.outputs)
     const rawTx = await self.client.createRawTransaction(rpc.inputs, rpc.outputs)
     self.emit('accept', rawTx)
 

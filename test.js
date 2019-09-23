@@ -89,6 +89,12 @@ ptest('initialise wallet', async t => {
   t.true(w.utxos.length > 0, 'wallet.utxos is an array of length greater than 0')
 })
 
+ptest('generateAddress test', async t => {
+  const w = new Wallet('test', [rootProof], [rgbSchema], opts1)
+
+  console.log(await w.generateAddresses(1))
+})
+
 ptest('two wallets performing transactions', async t => {
   const rpcInfoNode2 = {
     port: 18443,
@@ -107,8 +113,9 @@ ptest('two wallets performing transactions', async t => {
     w1.init(),
     w2.init()
   ])
+  console.log(w1.assets)
 
-  const requestedAsset = { asset: 'PLS', amount: 600 }
+  const requestedAsset = [{ asset: 'PLS', amount: 600 }]
 
   const request = await w2.createRequest(requestedAsset)
   console.log(request)

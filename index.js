@@ -25,17 +25,24 @@ class RgbWallet extends EventEmitter {
 
   async init () {
     const unspent = await this.client.listUnspent()
-    const { assets, outpoints } = getSealsFrom(this.proofs)
+    const assetsBySeal = getSealsFrom(this.proofs)
 
     const sealedOutpoints = []
-    for (const outpoint of outpoints) {
-      const utxoInfo = unspent.find(utxo =>
-        utxo.txid === outpoint.tx && utxo.vout === outpoint.vout)
-      if (utxoInfo !== null) sealedOutpoints.push(outpoint)
+
+    for (const seal of assetsBySeal) {
+      const utxoInfo = unspent.find(utxo => {
+        if (utxo.txid === seal.txid && utxo.vout === seal.vout) {
+          return true
+        } else return false
+      })
+      if (utxoInfo !== undefined && seal.txid) {
+        sealedOutpoints.push(seal)
+      }
     }
 
-    this.assets = assets.filter(asset => {
-      if (sealedOutpoints.find(s => s.tx === asset.tx && s.vout === asset.vout)) return true
+    this.assets = assetsBySeal.filter(asset => {
+      if (sealedOutpoints.find(s =>
+        s.txid === asset.txid && s.vout === asset.vout)) return true
       else return false
     })
 
@@ -50,6 +57,7 @@ class RgbWallet extends EventEmitter {
     })
 
     this.indexSchema()
+    return this.assets
   }
 
   indexSchema () {
@@ -96,7 +104,7 @@ class RgbWallet extends EventEmitter {
     const proofsByUTXO = {}
     for (const proof of proofs) {
       for (const seal of proof.seals) {
-        const outpoint = seal.outpoint
+        const outpoint = `${seal.txid}:${seal.vout}`
         proofsByUTXO[outpoint] = proof
       }
     }
@@ -118,6 +126,7 @@ class RgbWallet extends EventEmitter {
     }
   }
 
+  // TODO async update
   update () {
     const self = this
     const promise = listUnspent(self.client)

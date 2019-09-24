@@ -19,6 +19,7 @@
   "homepage": "https://github.com/hyperdivision/rgb-wallet#readme",
   "dependencies": {
     "bech32": "^1.1.3",
+    "bignumber.js": "^9.0.0",
     "bitcoin-core": "^2.2.0",
     "bs58": "^4.0.1",
     "coinkey": "^3.0.0",

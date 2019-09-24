@@ -8,6 +8,7 @@ const rpcInfoNode1 = {
   port: 18443,
   username: 'node1',
   password: 'a',
+  network: 'regtest',
   datadir: '../bitcoind',
   wallet: '1'
 }
@@ -27,21 +28,25 @@ const rootProof = {
   seals: [
     {
       type: 'assets',
+      txid: '9db9396ecb4b1dbe8c6fca1f7cc9f6d945ab6dc2c14ca6d9ac8ffbf17c5babac',
+      vout: 0,
       ticker: 'PLS',
-      outpoint: 'e4f7881de6747d99e00d7b4db95daafddc95ea7079754d2d45d63758beaa8eab:0',
       amount: 1000000
     },
     {
       type: 'inflation',
-      outpoint: '3836633ab081b3218ee59b89c3316949ed7e020b5144a70220cc2080a8b64b38:0'
+      txid: '3836633ab081b3218ee59b89c3316949ed7e020b5144a70220cc2080a8b64b3',
+      vout: 0
     },
     {
       type: 'upgrade',
-      outpoint: '53bb7537de9a8a76b044607c093fb2d7c9791a5a9ab5e95eb2c9366006248362:0'
+      txid: '53bb7537de9a8a76b044607c093fb2d7c9791a5a9ab5e95eb2c936600624836',
+      vout: 0
     },
     {
       type: 'pruning',
-      outpoint: 'aea48039c4db6fdc46fe767ee9a0d00896142a0e8e388098707382febc3dbb0c:0'
+      txid: 'aea48039c4db6fdc46fe767ee9a0d00896142a0e8e388098707382febc3dbb0',
+      vout: 0
     }
   ],
   pubkey: '0262b06cb205c3de54717e0bc0eab2088b0edb9b63fab499f6cac87548ca205be1'
@@ -51,8 +56,12 @@ const opts1 = {
   rpcInfo: rpcInfoNode1
 }
 
-test('wallet API', (t) => {
+ptest('wallet API', async t => {
   const w = new Wallet('test', [rootProof], [rgbSchema], opts1)
+
+  // const unspent = await w.client.listUnspent().then(utxos => utxos[Math.floor(Math.random()*utxos.length)])
+  // w.proofs[0].seals[0].txid = unspent.txid
+  // w.proofs[0].seals[0].vout = unspent.vout
 
   t.assert(w, 'wallet is created')
   t.deepEqual(w.proofs, [rootProof], 'proofs correctly loaded')
@@ -68,13 +77,12 @@ test('wallet API', (t) => {
   t.assert(w.generateAddresses, 'generateAddresses method exists')
   t.assert(w.accept, 'accept method exists')
   t.assert(w.broadcastTx, 'broadcastTx method exists')
-  t.end()
 })
 
 ptest('initialise wallet', async t => {
   const expectedAssets = [
     {
-      tx: 'e4f7881de6747d99e00d7b4db95daafddc95ea7079754d2d45d63758beaa8eab',
+      txid: '9db9396ecb4b1dbe8c6fca1f7cc9f6d945ab6dc2c14ca6d9ac8ffbf17c5babac',
       vout: 0,
       asset: 'PLS',
       amount: 1000000
@@ -82,6 +90,10 @@ ptest('initialise wallet', async t => {
   ]
 
   const w = new Wallet('test', [rootProof], [rgbSchema], opts1)
+
+  const unspent = await w.client.listUnspent().then(utxos => utxos[Math.floor(Math.random() * utxos.length)])
+  w.proofs[0].seals[0].txid = unspent.txid
+  w.proofs[0].seals[0].vout = unspent.vout
 
   await w.init()
   t.deepEqual(w.assets, expectedAssets, 'wallet has expected assets')
@@ -98,6 +110,7 @@ ptest('generateAddress test', async t => {
 ptest('two wallets performing transactions', async t => {
   const rpcInfoNode2 = {
     port: 18443,
+    network: 'regtest',
     username: 'node1',
     password: 'a',
     datadir: '../bitcoind',
@@ -107,27 +120,49 @@ ptest('two wallets performing transactions', async t => {
   const opts2 = { rpcInfo: rpcInfoNode2 }
 
   const w1 = new Wallet('test', [rootProof], [rgbSchema], opts1)
-  const w2 = new Wallet('test', [rootProof], [rgbSchema], opts2)
+  const w2 = new Wallet('test', [], [rgbSchema], opts2)
+
+  const unspent = await w1.client.listUnspent().then(utxos => utxos[Math.floor(Math.random() * utxos.length)])
+  w1.proofs[0].seals[0].txid = unspent.txid
+  w1.proofs[0].seals[0].vout = unspent.vout
 
   await Promise.all([
     w1.init(),
     w2.init()
   ])
-  console.log(w1.assets)
 
-  const requestedAsset = [{ asset: 'PLS', amount: 600 }]
+  const requestedAsset = [{ asset: 'PLS', amount: 750000 }]
+  const requestedAsset1 = [{ asset: 'PLS', amount: 250000 }]
 
   const request = await w2.createRequest(requestedAsset)
-  console.log(request)
+  console.log(request, 'request')
   const transferProposal = await w1.createTransferProposal(request)
   console.log(transferProposal)
-  // if (!(await w2.tpApprove(transferProposal))) t.fail()
+  // if (!(await w2.tpApprove(transferProposal))) t.fail()3
   const txProposal = await w2.createTxProposal(transferProposal)
-  console.log(txProposal)
+
   // if (!(await w1.txApprove(txProposal))) t.fail()
-  const finalTx = w1.broadcastTransaction(txProposal)
+  const finalTx = await w1.broadcastTx(txProposal)
   console.log(finalTx)
 
-  await w2.update()
-  t.assert(w2.confirmTx)
+  await w2.init()
+  console.log(w2.assets, 'assets')
+
+  const request1 = await w1.createRequest(requestedAsset1)
+  console.log(request1, 'request')
+  const transferProposal1 = await w2.createTransferProposal(request1)
+  console.log(transferProposal1)
+  // if (!(await w2.tpApprove(transferProposal))) t.fail()3
+  const txProposal1 = await w1.createTxProposal(transferProposal1)
+
+  // if (!(await w1.txApprove(txProposal))) t.fail()
+  const finalTx1 = await w2.broadcastTx(txProposal1)
+  console.log(finalTx1)
+
+  w1.init().then(() => console.log(w1.assets, 'w1'))
+  w2.init().then(() => console.log(w2.assets, 'w2'))
+})
+
+ptest('verification of transfer proofs', t => {
+  t.end()
 })

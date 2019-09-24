@@ -201,43 +201,82 @@ class RgbWallet extends EventEmitter {
     inputs.schemaId = [...schemas][0]
     inputs.schema = self.schemata[inputs.schemaId]
 
-    await self.client.getAddressInfo(inputs.request[0].address).then((info) =>
-      inputs.originalPubKey = info.pubkey)
+    await self.client.getAddressInfo(inputs.request[0].address).then(info => {
+      inputs.originalPubKey = info.pubkey
+    })
     const output = receiveAsset(inputs, self.utxos, opts)
     const rpc = output.rpc
 
     // focus here!!!
-    console.log(rpc.inputs, rpc.outputs)
     const rawTx = await self.client.createRawTransaction(rpc.inputs, rpc.outputs)
-    self.emit('accept', rawTx)
 
     self.client.decodeRawTransaction(rawTx).then((tx) => {
       // TODO -> deal with this pending tag
       console.log(JSON.stringify(tx, null, 2))
-      console.log(tx.vout)
       output.proof.pending = true
-      output.proof.txid = tx.txid
-      console.log(self.proofs)
-      output.proof.vout = 0
+      output.proof.tweakIndex = output.tweakIndex
+      output.proof.assetIndices = []
+      for (let i = 0; i < inputs.request.length; i++) {
+        if (!inputs.request[i].change) output.proof.assetIndices.push(i)
+      }
       self.proofs.push(output.proof)
     })
 
-    return rawTx
+    return {
+      rawTx,
+      proof: output.proof
+    }
   }
 
-  async broadcastTx (rawTx) {
-    const self = this
-    console.log(rawTx)
-    await (self.client.decodeRawTransaction(rawTx)).catch((err) => console.log(err))
+  async approveTransfer (transferProposal) {
+
+  }
+
+  async approveTx (txProposal) {
+    const tx = this.client.decodeRawTransaction(txProposal.rawTx)
+
+    for (const seal of txProposal.proof.seals) {
+      if (seal.txid) continue
+      seal.txid = tx.txid
+    }
+
+    txProposal.proof.tweakedUtxo = {
+      txid: tx.txid,
+      vout: txProposal.tweakIndex
+    }
+
+    txProposal.proof.pending = true
+
+    this.proofs.push(txProposal.proof)
+  }
+
+  async broadcastTx (txProposal) {
+    // console.log(txProposal.rawTx)
+    const tx = await this.client.decodeRawTransaction(txProposal.rawTx)
     // .then((tx) => checkTx(tx)))
 
-    self.client.signRawTransactionWithWallet(rawTx)
-      .then((tx) => self.client.sendRawTransaction(tx.hex))
+    txProposal.proof.tweakIndex = txProposal.tweakIndex
+
+    txProposal.proof.pending = true
+
+    this.proofs.push(txProposal.proof)
+    console.log(txProposal.rawTx)
+
+    return this.client.signRawTransactionWithWallet(txProposal.rawTx)
+      .then(tx => this.client.sendRawTransaction(tx.hex))
+      .then(txid => {
+        txProposal.proof.txid = txid
+        for (const seal of txProposal.proof.seals) {
+          if (seal.txid) continue
+          seal.txid = txid
+        }
+        return txid
+      })
   }
 }
 
 async function listUnspent (client) {
-  return await client.listUnspent()
+  return client.listUnspent()
 }
 
 module.exports = RgbWallet

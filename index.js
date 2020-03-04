@@ -1,12 +1,17 @@
 const Client = require('bitcoin-core')
 const { EventEmitter } = require('events')
 const { getSealsFrom, getTotalAssets } = require('./lib/get-assets.js')
+const hyperswarm = require('hyperswarm')
 const transferAsset = require('./lib/transfer-asset.js')
 const receiveAsset = require('./lib/receive-asset.js')
 const rgb = require('../rgb-encoding/index.js')
 const sodium = require('sodium-native')
+const pump = require('pump')
 const bech32 = require('bech32')
+// const Corestore = require('corestore')
+const hypercore = require('hypercore')
 const assert = require('nanoassert')
+const Regtest = require('bitcoin-test-util')
 
 class RgbWallet extends EventEmitter {
   constructor (name, proofs, schemas, opts) {
@@ -19,8 +24,11 @@ class RgbWallet extends EventEmitter {
 
     this.client = new Client(this.rpcInfo)
     this.assets = null
+    this.node = null
     this.utxos = null
     this.schemata = null
+    this.storage = null
+    this.feeds = {}
   }
 
   async init () {
@@ -40,6 +48,9 @@ class RgbWallet extends EventEmitter {
       }
     }
 
+    this.node = new Regtest(this.client)
+    await this.node.init()
+  
     this.assets = assetsBySeal.filter(asset => {
       if (sealedOutpoints.find(s =>
         s.txid === asset.txid && s.vout === asset.vout)) return true
@@ -55,6 +66,8 @@ class RgbWallet extends EventEmitter {
       }
       return utxo
     })
+    // hyperstorage -> should be in separate module
+    // this.storage = Corestore()
 
     this.indexSchema()
     return this.assets
@@ -86,6 +99,7 @@ class RgbWallet extends EventEmitter {
       formatRequest.address = addresses.pop()
       requestList.push(formatRequest)
     })
+
     return requestList
   }
 
@@ -175,8 +189,8 @@ class RgbWallet extends EventEmitter {
       if (key === 'asset') return value
     })
     assets = new Set(assets)
-    const changeAddresses = await self.generateAddresses(assets.size)
-    const inputs = transferAsset(self, requests, changeAddresses)
+    const changeAddresses = await self.generateAddresses(assets.size)    
+    const inputs = transferAsset(self, requests, changeAddresses)    
     return inputs
   }
 
@@ -189,7 +203,6 @@ class RgbWallet extends EventEmitter {
     return addresses
   }
 
-  // this is where i am at 15/09/19
   // receiving party: verify and build tx for sending party to publish
   async accept (inputs, opts) {
     const self = this
@@ -204,21 +217,24 @@ class RgbWallet extends EventEmitter {
     await self.client.getAddressInfo(inputs.request[0].address).then(info => {
       inputs.originalPubKey = info.pubkey
     })
+
     const output = receiveAsset(inputs, self.utxos, opts)
     const rpc = output.rpc
+    console.log(JSON.stringify(output, null, 2))
 
     // focus here!!!
     const rawTx = await self.client.createRawTransaction(rpc.inputs, rpc.outputs)
 
     self.client.decodeRawTransaction(rawTx).then((tx) => {
       // TODO -> deal with this pending tag
-      console.log(JSON.stringify(tx, null, 2))
+      // console.log(JSON.stringify(tx, null, 2))
       output.proof.pending = true
       output.proof.tweakIndex = output.tweakIndex
       output.proof.assetIndices = []
       for (let i = 0; i < inputs.request.length; i++) {
         if (!inputs.request[i].change) output.proof.assetIndices.push(i)
       }
+
       self.proofs.push(output.proof)
     })
 
@@ -230,6 +246,75 @@ class RgbWallet extends EventEmitter {
 
   async approveTransfer (transferProposal) {
 
+  }
+
+  createFeed (assetName, feedKey, cb) {
+    const self = this
+    assert(assetName, 'asset name must be declared.')
+
+    if (typeof feedKey === 'function') {
+      cb = feedKey
+      feedKey = null
+    }
+
+    const feed = hypercore(`./store/${self.name}/${assetName}`, feedKey, {
+      valueEncoding: 'json'
+    })
+
+    const swarm = hyperswarm()
+
+    feed.on('ready', () => {
+      feed.assetName = assetName
+      self.feeds[assetName] = feed
+
+      swarm.join(topicGen(assetName))
+      swarm.on('connection', function (socket) {
+        pump(socket, feed.replicate(true, {live: true}), socket)
+      })
+
+      for (let proof of self.proofs) {
+        feed.append(proof)
+      }
+      
+      cb(feed)
+    })
+  }
+
+  async sync (feed) {
+    const self = this
+
+    feed.createReadStream({ live: true })
+      .on('data', function (data) {
+        // console.log(data)
+      })
+
+    const swarm = hyperswarm()
+
+    swarm.join(topicGen(feed.assetName), {
+      lookup: true, 
+      announce: true
+    })
+
+    swarm.on('connection', function (socket, details) {
+      console.log('connection')
+      pump(socket, feed.replicate(false, { live: true }), socket)
+      swarm.leave(topicGen(feed.assetName))
+    })
+  }
+
+  async appendToFeed (proof, cb) {
+    const assetName = proof.fields.title
+
+    const feed = this.feeds[assetName]
+
+    feed.append(proof)
+    cb(feed)
+  }
+
+  async syncFeeds () {
+    for (let feed of this.feeds) {
+      sync(feed)
+    }
   }
 
   async approveTx (txProposal) {
@@ -258,9 +343,11 @@ class RgbWallet extends EventEmitter {
     txProposal.proof.tweakIndex = txProposal.tweakIndex
 
     txProposal.proof.pending = true
+    txProposal.proof.fields = { title: 'PLS' }
 
     this.proofs.push(txProposal.proof)
-    console.log(txProposal.rawTx)
+    // this.appendToFeed(txProposal.proof)
+    // console.log(txProposal.rawTx)
 
     return this.client.signRawTransactionWithWallet(txProposal.rawTx)
       .then(tx => this.client.sendRawTransaction(tx.hex))
@@ -277,6 +364,13 @@ class RgbWallet extends EventEmitter {
 
 async function listUnspent (client) {
   return client.listUnspent()
+}
+
+function topicGen (title) {
+  const topic = Buffer.alloc(sodium.crypto_hash_sha256_BYTES)
+  sodium.crypto_hash_sha256(topic, Buffer.from(title))
+
+  return topic
 }
 
 module.exports = RgbWallet

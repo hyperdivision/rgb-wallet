@@ -6,8 +6,8 @@ const Client = require('bitcoin-core')
 
 const client = new Client({
   network: 'regtest',
-  username: 'node1',
-  password: 'password',
+  username: 'node',
+  password: '12345678',
   port: 18443
 })
 

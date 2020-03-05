@@ -1,0 +1,128 @@
+const rgbSchema = require('./schema.js')
+const Wallet = require('./index.js')
+const rgb = require('../rgb-encoding/index.js')
+const node = require('bitcoin-test-util')
+const fs = require('fs')
+
+const rpcInfoNode1 = {
+  port: 18443,
+  username: 'node',
+  password: '12345678',
+  network: 'regtest',
+  // datadir: '../bitcoind',
+  wallet: '1'
+}
+
+const rootProof = {
+  ver: 1,
+  format: 'root',
+  schema: 'sm1m3pkuxxyl0rp3e6drhlhw40f8uhg0xx9qem57jq32dhxmzzfgvpsgvqvjw',
+  network: 'testnet',
+  root: '5700bdccfc6209a5460dc124403eed6c3f5ba58da0123b392ab0b1fa23306f27:4',
+  type: 'primary_issue',
+  fields: {
+    title: 'Private Company Ltd Shares',
+    ticker: 'PLS',
+    dust_limit: 1
+  },
+  seals: [
+    {
+      type: 'assets',
+      txid: '9db9396ecb4b1dbe8c6fca1f7cc9f6d945ab6dc2c14ca6d9ac8ffbf17c5babac',
+      vout: 0,
+      ticker: 'PLS',
+      amount: 1000000
+    },
+    {
+      type: 'inflation',
+      txid: '795f71a8be38f8baee18fa27ee90262b395ca3bd9214c10ffe76133882f504fb',
+      vout: 0
+    },
+    {
+      type: 'upgrade',
+      txid: 'ab7672e5cb084005a85b447c52a15d97ea8ec047e1b20dc4c3ec91e1fb0584fc',
+      vout: 0
+    },
+    {
+      type: 'pruning',
+      txid: 'a9fc4d1f30550df12cf6cee0adbff2ea37e0c908afac8ccfa984afa24c8fd1f9',
+      vout: 0
+    }
+  ],
+  pubkey: '0262b06cb205c3de54717e0bc0eab2088b0edb9b63fab499f6cac87548ca205be1'
+}
+
+const rpcInfoNode2 = {
+  port: 18443,
+  network: 'regtest',
+  username: 'node',
+  password: '12345678',
+  // datadir: '../bitcoind',
+  wallet: '2'
+}
+
+const opts1 = { rpcInfo: rpcInfoNode1 }
+const opts2 = { rpcInfo: rpcInfoNode2 }
+
+const w1 = new Wallet('test', [rootProof], [rgbSchema], opts1)
+const w2 = new Wallet('test', [], [rgbSchema], opts2)
+
+async function nTransfers (n) {
+  await Promise.all([
+    w1.init(),
+    w2.init()
+  ])
+
+  const unspent = await w1.client.listUnspent().then(utxos => utxos[Math.floor(Math.random() * utxos.length)])
+  w1.proofs[0].seals[0].txid = unspent.txid
+  w1.proofs[0].seals[0].vout = unspent.vout
+
+  await w1.init()  
+
+  console.log(w1.assets)
+  console.log(w1.proofs[0])
+
+  let proofHistory = []
+  proofHistory.push(rgb.proof.encode(rootProof, rgbSchema).toString('hex'))
+
+  for (let i = 1; i <= n; i++) {
+    // console.log(w1.assets, 'w1')
+    // console.log(w2.assets, 'w2')
+
+    const requestedAsset = [{ asset: 'PLS', amount: 1000000 - 500 * i }]
+    const requestedAsset1 = [{ asset: 'PLS', amount: 1000000 - 500 * (i + 1) }]
+
+    const request = await w2.createRequest(requestedAsset)    
+    const transferProposal = await w1.createTransferProposal(request)
+
+    // if (!(await w2.tpApprove(transferProposal))) t.fail()3
+    const txProposal = await w2.createTxProposal(transferProposal)
+
+    // if (!(await w1.txApprove(txProposal))) t.fail()
+    const finalTx = await w1.broadcastTx(txProposal)
+    console.log(finalTx)
+
+    await w2.init()
+    proofHistory.push(rgb.proof.encode(w2.proofs.slice().pop(), rgbSchema).toString('hex'))
+
+    const request1 = await w1.createRequest(requestedAsset1)
+    const transferProposal1 = await w2.createTransferProposal(request1)
+    // if (!(await w2.tpApprove(transferProposal))) t.fail()3
+    const txProposal1 = await w1.createTxProposal(transferProposal1)
+    // if (!(await w1.txApprove(txProposal))) t.fail()
+    const finalTx1 = await w2.broadcastTx(txProposal1)
+
+    await w1.init()
+    await w2.init()
+
+    proofHistory.push(rgb.proof.encode(w1.proofs.slice().pop(), rgbSchema).toString('hex'))
+  }
+
+  return proofHistory
+}
+
+nTransfers(6).then(array => {
+  fs.writeFile('./lib/OpenSeals/raw.json', JSON.stringify({ raw: array }, null, 2), err => {
+    if (err) throw err
+  })
+}).catch(console.error)

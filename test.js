@@ -3,13 +3,14 @@ const ptape = require('tape-promise').default
 const ptest = ptape(test)
 const rgbSchema = require('./schema.js')
 const Wallet = require('./index.js')
+const mint = require('./lib/mint-asset.js')
 
 const rpcInfoNode1 = {
-  port: 18443,
-  username: 'node1',
-  password: 'a',
+  port: 18446,
+  username: 'lnd',
+  password: 'password',
   network: 'regtest',
-  datadir: '../bitcoind',
+  // datadir: '../bitcoind',
   wallet: '1'
 }
 
@@ -35,17 +36,17 @@ const rootProof = {
     },
     {
       type: 'inflation',
-      txid: '3836633ab081b3218ee59b89c3316949ed7e020b5144a70220cc2080a8b64b3',
+      txid: '795f71a8be38f8baee18fa27ee90262b395ca3bd9214c10ffe76133882f504fb',
       vout: 0
     },
     {
       type: 'upgrade',
-      txid: '53bb7537de9a8a76b044607c093fb2d7c9791a5a9ab5e95eb2c936600624836',
+      txid: 'ab7672e5cb084005a85b447c52a15d97ea8ec047e1b20dc4c3ec91e1fb0584fc',
       vout: 0
     },
     {
       type: 'pruning',
-      txid: 'aea48039c4db6fdc46fe767ee9a0d00896142a0e8e388098707382febc3dbb0',
+      txid: 'a9fc4d1f30550df12cf6cee0adbff2ea37e0c908afac8ccfa984afa24c8fd1f9',
       vout: 0
     }
   ],
@@ -90,6 +91,8 @@ ptest('initialise wallet', async t => {
   ]
 
   const w = new Wallet('test', [rootProof], [rgbSchema], opts1)
+  const address = await w.client.getNewAddress('', 'legacy')
+  await w.client.generateToAddress(120, address)
 
   const unspent = await w.client.listUnspent().then(utxos => utxos[Math.floor(Math.random() * utxos.length)])
   w.proofs[0].seals[0].txid = unspent.txid
@@ -109,18 +112,18 @@ ptest('generateAddress test', async t => {
 
 ptest('two wallets performing transactions', async t => {
   const rpcInfoNode2 = {
-    port: 18443,
+    port: 18446,
     network: 'regtest',
-    username: 'node1',
-    password: 'a',
-    datadir: '../bitcoind',
+    username: 'lnd',
+    password: 'password',
+    // datadir: '../bitcoind',
     wallet: '2'
   }
 
   const opts2 = { rpcInfo: rpcInfoNode2 }
 
-  const w1 = new Wallet('test', [rootProof], [rgbSchema], opts1)
-  const w2 = new Wallet('test', [], [rgbSchema], opts2)
+  const w1 = new Wallet('test1', [rootProof], [rgbSchema], opts1)
+  const w2 = new Wallet('test2', [], [rgbSchema], opts2)
 
   const unspent = await w1.client.listUnspent().then(utxos => utxos[Math.floor(Math.random() * utxos.length)])
   w1.proofs[0].seals[0].txid = unspent.txid
@@ -138,7 +141,7 @@ ptest('two wallets performing transactions', async t => {
   console.log(request, 'request')
   const transferProposal = await w1.createTransferProposal(request)
   console.log(transferProposal)
-  // if (!(await w2.tpApprove(transferProposal))) t.fail()3
+  // if (!(await w2.tpApprove(transferProposal))) t.fail()
   const txProposal = await w2.createTxProposal(transferProposal)
 
   // if (!(await w1.txApprove(txProposal))) t.fail()
@@ -150,6 +153,7 @@ ptest('two wallets performing transactions', async t => {
 
   const request1 = await w1.createRequest(requestedAsset1)
   console.log(request1, 'request')
+
   const transferProposal1 = await w2.createTransferProposal(request1)
   console.log(transferProposal1)
   // if (!(await w2.tpApprove(transferProposal))) t.fail()3
@@ -163,6 +167,62 @@ ptest('two wallets performing transactions', async t => {
   w2.init().then(() => console.log(w2.assets, 'w2'))
 })
 
-ptest('verification of transfer proofs', t => {
+ptest.skip('hypercore storage of transfer proofs', async t => {
+   const rpcInfoNode2 = {
+    port: 18446,
+    network: 'regtest',
+    username: 'lnd',
+    password: 'password',
+    // datadir: '../bitcoind',
+    wallet: '2'
+  }
+
+  const opts2 = { rpcInfo: rpcInfoNode2 }
+
+  const w1 = new Wallet('test1', [rootProof], [rgbSchema], opts1)
+  const w2 = new Wallet('test2', [], [rgbSchema], opts2)
+
+  const unspent = await w1.client.listUnspent().then(utxos => utxos[Math.floor(Math.random() * utxos.length)])
+  w1.proofs[0].seals[0].txid = unspent.txid
+  w1.proofs[0].seals[0].vout = unspent.vout
+
+  await Promise.all([
+    w1.init(),
+    w2.init()
+  ])
+  
+  const feed = w1.createFeed('PLS', function (feed) {
+    console.log(w1.feeds['PLS'], feed.key.toString('hex'))
+    w2.createFeed(feed.assetName, feed.key.toString('hex'), (feed) => {
+      w2.sync(feed)
+      feed.on('append', () => console.log('w2 appended'))
+    })
+  })
+  
+  process.stdin.on('data', function (data) {
+    // console.log(dabta.toString())
+    w1.appendToFeed(newProof, () => {
+      setTimeout(() => w1.feeds['PLS'].head({}, console.log), 200)
+    })
+  })
+
   t.end()
 })
+
+const newProof = {
+  network: 'testnet',
+  schema: 'sm1m3pkuxxyl0rp3e6drhlhw40f8uhg0xx9qem57jq32dhxmzzfgvpsgvqvjw',
+  fields: {
+    title: 'PLS'
+  },
+  ver: 1,
+  format: 'ordinary',
+  type: 'asset_transfer',
+  seals: [0, 1],
+  pubkey: '02e277cd18ad85d1b8b70130df4c25fd5e6550ad175295f1c73a79fd9f02195047',
+  pending: true,
+  tweakIndex: undefined,
+  assetIndices: [0, 1],
+  txid: 'f0f02bcf7e8e80e1faa422b1fecaf9170abe68f4bd19ec65d01220e8ccde5707',
+  vout: 0 
+}

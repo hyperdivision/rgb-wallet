@@ -1,117 +1,119 @@
-
-const Client = require('bitcoin-core')
-const { EventEmitter } = require('events')
-const { getSealsFrom, getTotalAssets } = require('./lib/get-assets.js')
-const hyperswarm = require('hyperswarm')
-const transferAsset = require('./lib/transfer-asset.js')
-const receiveAsset = require('./lib/receive-asset.js')
-const rgb = require('../rgb-encoding/index.js')
-const sodium = require('sodium-native')
-const pump = require('pump')
-const bech32 = require('bech32')
-// const Corestore = require('corestore')
-const hypercore = require('hypercore')
 const assert = require('nanoassert')
-const Regtest = require('bitcoin-test-util')
+const Client = require('./lib/chain.js')
+const transact = require('./lib/tx.js')
+const proofFromProposal = require('./lib/proof')
+const keys = require('./lib/keys')
+const wallet = require('./lib/wallet.js')
+const crypto = require('./lib/crypto')
+const rgb = require('../rgb-encoding/index.js')
 
-class RgbWallet extends EventEmitter {
+/*
+  TODO: 
+    - chain.findSpendingTx -> make concurrent
+    - have spare address list, keep refilling to 100
+*/
+
+module.exports = class {
   constructor (name, proofs, schemas, opts) {
-    super()
-
     this.name = name
     this.proofs = proofs
     this.schemas = schemas
     this.rpcInfo = opts.rpcInfo
 
-    this.client = new Client(this.rpcInfo)
+    this.chain = new Client(this.rpcInfo)
     this.assets = null
-    this.node = null
     this.utxos = null
     this.schemata = null
-    this.storage = null
-    this.feeds = {}
   }
 
   async init () {
-    const unspent = await this.client.listUnspent()
-    const assetsBySeal = getSealsFrom(this.proofs)
+    // on-chain utxos
+    const unspent = await this.chain.client.listUnspent()
+   
+    // seals referenced in proofs
+    const assetsBySeal = wallet.assetsFromProofs(this.proofs)
 
-    const sealedOutpoints = []
-
-    for (const seal of assetsBySeal) {
-      const utxoInfo = unspent.find(utxo => {
-        if (utxo.txid === seal.txid && utxo.vout === seal.vout) {
-          return true
-        } else return false
-      })
-      if (utxoInfo !== undefined && seal.txid) {
-        sealedOutpoints.push(seal)
-      }
-    }
-
-    this.node = new Regtest(this.client)
-    await this.node.init()
-  
-    this.assets = assetsBySeal.filter(asset => {
-      if (sealedOutpoints.find(s =>
-        s.txid === asset.txid && s.vout === asset.vout)) return true
-      else return false
-    })
-
-    this.utxos = unspent.map(a => {
-      const utxo = {
-        txid: a.txid,
-        vout: a.vout,
-        address: a.address,
-        amount: a.amount
-      }
-      return utxo
-    })
-    // hyperstorage -> should be in separate module
-    // this.storage = Corestore()
+    // prune spent seals and those we do not own
+    this.assets = assetsBySeal.filter(seal => 
+      unspent.findIndex(matchUtxo(seal)) !== -1 && seal.txid)
+    
+    // store relevant utxo data
+    this.utxos = unspent.map(formatUnspent)
 
     this.indexSchema()
     return this.assets
   }
 
   indexSchema () {
-    const self = this
-    self.schemata = {}
-    for (const schema of self.schemas) {
+    this.schemata = {}
+    for (const schema of this.schemas) {
       const encodedSchema = rgb.schema.encode(schema)
-      const schemaHash = Buffer.alloc(sodium.crypto_hash_sha256_BYTES)
-
-      sodium.crypto_hash_sha256(schemaHash, encodedSchema)
-      sodium.crypto_hash_sha256(schemaHash, schemaHash)
-
-      const schemaId = bech32.encode('sm', bech32.toWords(schemaHash))
-      self.schemata[schemaId] = schema
+      const schemaHash = crypto.doubleSha256(encodedSchema)
+   
+      const schemaId = crypto.toBech32('sm', schemaHash)
+      this.schemata[schemaId] = schema
     }
-    return self.schemata
+
+    return this.schemata
   }
 
   async createRequest (requestedAssets) {
     const requestList = []
-    const addresses = await this.generateAddresses(requestedAssets.length)
-    requestedAssets.map(request => {
-      const formatRequest = {}
-      formatRequest.asset = request.asset
-      formatRequest.amount = request.amount
-      formatRequest.address = addresses.pop()
-      requestList.push(formatRequest)
-    })
-
-    return requestList
+    const addresses = await this.chain.generateAddresses(requestedAssets.length)
+    return requestedAssets.map(formatRequest(addresses))
   }
 
   async createTransferProposal (request) {
-    const transferProposal = await this.transfer(request)
-    return transferProposal
+    const change = await this.generateChangeOutputs(request)
+    const assets = this.assets
+    const sortedProofs = this.sortProofs()
+
+    return transact.transfer(request, assets, change, sortedProofs, this.utxos)
   }
 
-  async createTxProposal (transferProposal) {
-    const txProposal = await this.accept(transferProposal)
-    return txProposal
+  async createTxProposal (proposal) {
+    const firstAddress = proposal.request[0].address
+
+    // for (let proof of proposal.proofs) {
+    //   verify(proof)
+    // }
+    
+    await this.chain.client.getAddressInfo(firstAddress).then(info => {
+      proposal.originalPubKey = info.pubkey
+    })
+
+    const transferProof = proofFromProposal(proposal, this.utxos, this.schemata)
+    transferProof.serialized = rgb.proof.encode(transferProof, proposal.schema)
+
+    const { rpc, proof } = await transact.accept(proposal, transferProof)    
+    const rawTx = await this.chain.createTx(rpc.inputs, rpc.outputs)
+
+    this.proofs.push(proof)
+
+    return {
+      rawTx,
+      proof: transferProof
+    }
+  }
+
+  async approveTransfer (transferProposal) {
+
+  }
+
+  async broadcastTx (txProposal) {
+    const tx = await this.chain.client.decodeRawTransaction(txProposal.rawTx)
+
+    txProposal.proof.tweakIndex = txProposal.tweakIndex
+
+    const txid = await this.chain.broadcast(txProposal.rawTx)
+
+    txProposal.proof.fields = { title: 'PLS' }
+    txProposal.proof.pending = false
+    
+    txProposal.proof.txid = txid
+    this.proofs.push(txProposal.proof)
+
+    return txid  
   }
 
   sortProofs () {
@@ -141,159 +143,63 @@ class RgbWallet extends EventEmitter {
     }
   }
 
-  // TODO async update
   update () {
     const self = this
-    const promise = listUnspent(self.client)
-    self.emit('update', promise)
-    return promise
-  }
+    const seals = wallet.sealsFromProofs(this.proofs)
+    const prunedSeals = this.chain.pruneUnsealed(seals)
+    const assets = wallet.assetsFromSeal(seals)
 
-  updateAssets (listUnspent) {
-    const self = this
-    listUnspent.then(getTotalAssets(self.client, self.proofs))
-      .then((assets) => {
-        self.assets = assets
-        return assets
+    this.chain.listUnspent()
+      .then(utxos => {
+        self.assets = wallet.getTotalAssets(utxos, assetsInProofs)
+
+        const activeProofs = wallet.updateProofs(utxos, self.sortProofs())
+        self.proofs = Object.values(activeProofs)
+        
+        return self      
       })
   }
 
-  updateProofs () {
+  async generateChangeOutputs (request) {
     const self = this
-    return (UTXOs) => {
-      const activeVouts = UTXOs.map(item => `${item.txid}:${item.vout}`)
 
-      const proofs = self.sortProofs(self.proofs)
-      for (const outpoint of Object.keys(proofs)) {
-        if (!activeVouts.includes(outpoint)) delete proofs[outpoint]
-      }
+    let requestedAssets = request.map(req => req.asset)
+    requestedAssets = new Set(requestedAssets)
 
-      self.proofs = self.proofs.filter((proof) =>
-        Object.values(proofs).includes(proof))
-      return self.proofs
-    }
-  }
+    const addresses = await this.chain.generateAddresses(requestedAssets.size)
 
-  async fetchTx (TxID) {
-    const self = this
-    const result = await self.client.getRawTransaction(TxID)
-    var tx = self.client.decodeRawTransaction(result)
-
-    return tx
-  }
-
-  // sending party: collect and send necessary parts
-  // for paying party to build tx
-  async transfer (requests) {
-    const self = this
-    let assets = Object.entries(requests).map(([key, value]) => {
-      if (key === 'asset') return value
-    })
-    assets = new Set(assets)
-    const changeAddresses = await self.generateAddresses(assets.size)    
-    const inputs = transferAsset(self, requests, changeAddresses)    
-    return inputs
-  }
-
-  async generateAddresses (number) {
-    const self = this
-    const addresses = []
-    for (let i = 0; i < number; i++) {
-      await self.client.getNewAddress('', 'legacy').then((address) => addresses.push(address))
-    }
-    return addresses
-  }
-
-  // receiving party: verify and build tx for sending party to publish
-  async accept (inputs, opts) {
-    const self = this
-    // for (let proof of Object.values(inputs.proofs)) {
-    //   verify.proof(proof)
-    // }
-    const schemas = new Set(inputs.proofs.map((proof) => proof.schema))
-    assert(schemas.size === 1, 'more than one schema present')
-    inputs.schemaId = [...schemas][0]
-    inputs.schema = self.schemata[inputs.schemaId]
-
-    await self.client.getAddressInfo(inputs.request[0].address).then(info => {
-      inputs.originalPubKey = info.pubkey
+    const outputs = addresses.map(addr => {
+      const output = {}
+      output.address = addr
+      output.assetUtxo = this.utxos[Math.floor(Math.random() * this.utxos.length)]
+      return output
     })
 
-    const output = receiveAsset(inputs, self.utxos, opts)
-    const rpc = output.rpc
-
-    // focus here!!!
-    const rawTx = await self.client.createRawTransaction(rpc.inputs, rpc.outputs)
-
-    self.client.decodeRawTransaction(rawTx).then((tx) => {
-      // TODO -> deal with this pending tag
-      output.proof.pending = true
-      output.proof.tweakIndex = output.tweakIndex
-      output.proof.assetIndices = []
-      for (let i = 0; i < inputs.request.length; i++) {
-        if (!inputs.request[i].change) output.proof.assetIndices.push(i)
-      }
-
-      self.proofs.push(output.proof)
-    })
-
-    return {
-      rawTx,
-      proof: output.proof
-    }
-  }
-
-  async approveTransfer (transferProposal) {
-
-  }
-
-  async approveTx (txProposal) {
-    const tx = this.client.decodeRawTransaction(txProposal.rawTx)
-
-    for (const seal of txProposal.proof.seals) {
-      if (seal.txid) continue
-      seal.txid = tx.txid
-    }
-
-    txProposal.proof.tweakedUtxo = {
-      txid: tx.txid,
-      vout: txProposal.tweakIndex
-    }
-
-    txProposal.proof.pending = true
-
-    this.proofs.push(txProposal.proof)
-  }
-
-  async broadcastTx (txProposal) {
-    // console.log(txProposal.rawTx)
-    const tx = await this.client.decodeRawTransaction(txProposal.rawTx)
-    // .then((tx) => checkTx(tx)))
-
-    txProposal.proof.tweakIndex = txProposal.tweakIndex
-
-    txProposal.proof.pending = true
-    txProposal.proof.fields = { title: 'PLS' }
-
-    this.proofs.push(txProposal.proof)
-    // this.appendToFeed(txProposal.proof)
-    // console.log(txProposal.rawTx)
-
-    return this.client.signRawTransactionWithWallet(txProposal.rawTx)
-      .then(tx => this.client.sendRawTransaction(tx.hex))
-      .then(txid => {
-        txProposal.proof.txid = txid
-        for (const seal of txProposal.proof.seals) {
-          if (seal.txid) continue
-          seal.txid = txid
-        }
-        return txid
-      })
+    return outputs
   }
 }
 
-async function listUnspent (client) {
-  return client.listUnspent()
+// Helper functions
+function formatRequest (addresses) {
+  return req => {
+    const formatRequest = {
+      asset: req.asset,
+      amount: req.amount,
+      address: addresses.pop()
+    }
+    return formatRequest
+  }
 }
 
-module.exports = RgbWallet
+function formatUnspent (utxo) {
+  return {
+    txid: utxo.txid,
+    vout: utxo.vout,
+    address: utxo.address,
+    amount: utxo.amount
+  }
+}
+
+function matchUtxo (item) {
+  return utxo => utxo.txid === item.txid && utxo.vout === item.vout
+}
